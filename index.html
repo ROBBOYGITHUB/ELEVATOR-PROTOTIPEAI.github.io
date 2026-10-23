@@ -1,1 +1,1211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ULTRAKILL-Style 3D Shooter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Courier New', Courier, monospace;
+            user-select: none;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+        /* PSX Pixelation Effect via Canvas scale */
+        canvas {
+            image-rendering: pixelated;
+        }
+        .retro-border {
+            border: 2px solid #ff0055;
+            box-shadow: 0 0 10px #ff0055, inset 0 0 5px #ff0055;
+        }
+        .style-rank {
+            text-shadow: 0 0 8px currentColor;
+        }
+        .hitmarker {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            pointer-events: none;
+            transition: transform 0.05s ease-out, opacity 0.15s ease-out;
+        }
+        .parry-flash {
+            animation: parryFlashAnim 0.3s ease-out forwards;
+        }
+        @keyframes parryFlashAnim {
+            0% { background-color: rgba(255, 255, 255, 0.8); }
+            100% { background-color: rgba(255, 255, 255, 0); }
+        }
 
+        /* --- VHS retro overlay effect --- */
+        .vhs-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            z-index: 25;
+            background: linear-gradient(
+                rgba(18, 16, 16, 0) 50%, 
+                rgba(0, 0, 0, 0.25) 50%
+            ), linear-gradient(
+                90deg,
+                rgba(255, 0, 0, 0.03),
+                rgba(0, 255, 0, 0.01),
+                rgba(0, 0, 255, 0.03)
+            );
+            background-size: 100% 4px, 6px 100%;
+            opacity: 0.85;
+        }
+
+        .vhs-glitch-line {
+            position: fixed;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: rgba(255, 255, 255, 0.15);
+            pointer-events: none;
+            z-index: 26;
+            animation: vhsScan 4s linear infinite;
+        }
+
+        @keyframes vhsScan {
+            0% { top: 0%; }
+            100% { top: 100%; }
+        }
+    </style>
+</head>
+<body class="relative text-white select-none">
+
+    <!-- VHS Lines & Scanline Overlay -->
+    <div class="vhs-overlay"></div>
+    <div class="vhs-glitch-line"></div>
+
+    <!-- Screen Flash Overlay for Parry & Hits -->
+    <div id="flash-overlay" class="pointer-events-none fixed inset-0 z-40 bg-transparent"></div>
+
+    <!-- WebGL Canvas Container -->
+    <div id="canvas-container"></div>
+
+    <!-- HUD Overlay -->
+    <div id="hud" class="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between p-6 hidden">
+        <!-- Top Bar: Boss Health & Style Meter -->
+        <div class="flex justify-between items-start w-full">
+            <!-- Health & Dash Stamina Bar (Bottom Left style moved to top for clarity or bottom left) -->
+            <div class="flex flex-col gap-2 w-72">
+                <div class="bg-black/70 p-3 border-2 border-red-600 rounded">
+                    <div class="flex justify-between text-xs font-bold mb-1 text-red-500 tracking-widest">
+                        <span>HEALTH</span>
+                        <span id="hp-text">100 / 100</span>
+                    </div>
+                    <div class="w-full bg-gray-900 h-4 border border-red-900 overflow-hidden">
+                        <div id="hp-bar" class="bg-red-600 h-full w-full transition-all duration-100"></div>
+                    </div>
+                </div>
+
+                <div class="bg-black/70 p-2 border border-cyan-500/50 rounded">
+                    <div class="flex justify-between text-xs font-bold mb-1 text-cyan-400 tracking-wider">
+                        <span>STAMINA (DASH)</span>
+                    </div>
+                    <div class="flex gap-1">
+                        <div id="dash-1" class="h-2 flex-1 bg-cyan-400 rounded-sm"></div>
+                        <div id="dash-2" class="h-2 flex-1 bg-cyan-400 rounded-sm"></div>
+                        <div id="dash-3" class="h-2 flex-1 bg-cyan-400 rounded-sm"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Boss Bar (Appears when active) -->
+            <div id="boss-hud" class="w-1/2 max-w-xl bg-black/80 p-3 border-2 border-yellow-500 rounded hidden flex-col items-center">
+                <div class="flex justify-between w-full text-yellow-400 font-black text-sm tracking-widest mb-1">
+                    <span>APOSTLE V-NEXUS</span>
+                    <span id="boss-hp-text">100%</span>
+                </div>
+                <div class="w-full bg-gray-900 h-5 border border-yellow-700 overflow-hidden">
+                    <div id="boss-hp-bar" class="bg-gradient-to-r from-red-600 to-yellow-500 h-full w-full transition-all duration-75"></div>
+                </div>
+            </div>
+
+            <!-- Style Meter -->
+            <div class="flex flex-col items-end">
+                <div id="style-rank" class="text-5xl font-black italic style-rank text-gray-500 tracking-tighter">
+                    DESTRUCTIVE
+                </div>
+                <div id="style-pts" class="text-yellow-400 text-sm font-bold mt-1">
+                    0 PTS
+                </div>
+                <div id="style-action" class="text-xs text-cyan-300 italic h-4 mt-1"></div>
+            </div>
+        </div>
+
+        <!-- Crosshair & Hitmarker -->
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+            <div id="crosshair" class="w-3 h-3 border border-cyan-400 rounded-full relative flex items-center justify-center">
+                <div class="w-1 h-1 bg-cyan-300 rounded-full"></div>
+            </div>
+            <!-- Hitmarker -->
+            <svg id="hitmarker" class="hitmarker w-8 h-8 text-red-500" viewBox="0 0 100 100">
+                <line x1="20" y1="20" x2="40" y2="40" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
+                <line x1="80" y1="20" x2="60" y2="40" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
+                <line x1="20" y1="80" x2="40" y2="60" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
+                <line x1="80" y1="80" x2="60" y2="60" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
+            </svg>
+        </div>
+
+        <!-- Bottom Bar: Controls & Ammo -->
+        <div class="flex justify-between items-end w-full">
+            <div class="bg-black/60 p-2 text-xs text-gray-400 border border-gray-800 rounded">
+                [WASD] Move | [SPACE] Jump/Double Jump | [SHIFT] Omnidirectional Dash<br>
+                [L-CLICK] Fire Shotgun | [R-CLICK / F] PARRY
+            </div>
+            <div class="text-right bg-black/70 p-3 border-2 border-yellow-500 rounded">
+                <div class="text-xs text-yellow-500 font-bold tracking-widest">WEAPON</div>
+                <div class="text-xl font-extrabold text-white">ALT-SHOTGUN</div>
+                <div id="parry-status" class="text-xs font-bold text-cyan-400 mt-1">PARRY READY [R-CLICK/F]</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Start / Pause / Game Over / Deployment Overlay -->
+    <div id="menu-overlay" class="fixed inset-0 z-30 bg-black/90 flex flex-col items-center justify-center p-6 text-center">
+        <h1 class="text-6xl font-black italic tracking-wider text-red-600 mb-2 drop-shadow-[0_0_15px_rgba(255,0,0,0.8)]">
+            ULTRA-KILLER
+        </h1>
+        <p class="text-yellow-400 font-mono text-sm mb-6 uppercase tracking-widest">3D Retro Shooter & Parry Engine</p>
+
+        <!-- Start Button -->
+        <button id="start-btn" class="px-8 py-4 bg-red-600 hover:bg-red-500 text-black font-black text-2xl tracking-widest uppercase transition-all transform hover:scale-105 border-2 border-yellow-400 shadow-[0_0_20px_rgba(255,0,0,0.8)] cursor-pointer mb-6">
+            ENTER THE SLAUGHTER
+        </button>
+
+        <!-- GitHub Deployment Instructions Box -->
+        <div class="max-w-xl w-full bg-gray-950 p-4 border border-red-900 rounded text-left text-xs font-mono text-gray-300 space-y-2">
+            <div class="text-yellow-400 font-bold border-b border-red-900 pb-1 flex justify-between">
+                <span>🚀 Duro</span>
+                <span>GRATIS</span>
+            </div>
+            <ol class="list-decimal list-inside space-y-1 text-gray-400">
+                <li>Guarda este código como un archivo llamado <span class="text-white font-bold">index.html</span> en tu PC.</li>
+                <li>Entra a <span class="text-cyan-400 font-bold">github.com</span> y crea un nuevo repositorio público (ej. <span class="text-yellow-300">ultrakill-game</span>).</li>
+                <li>Haz clic en <span class="text-white font-bold">"Uploading an existing file"</span> y arrastra el archivo <span class="text-white font-bold">index.html</span>.</li>
+                <li>Ve a la pestaña <span class="text-white font-bold">Settings</span> (Configuración) &gt; menú lateral <span class="text-white font-bold">Pages</span>.</li>
+                <li>En <span class="text-white font-bold">Branch</span>, selecciona <span class="text-yellow-300">main</span> (o master) y pulsa <span class="text-white font-bold">Save</span>.</li>
+                <li>En 1 minuto tu juego estará disponible en: <span class="text-cyan-400">https://tu-usuario.github.io/ultrakill-game/</span></li>
+            </ol>
+        </div>
+    </div>
+
+    <!-- Game Logic & Three.js Code -->
+    <script>
+        // --- GAME STATE & CONSTANTS ---
+        const STATE = {
+            started: false,
+            paused: false,
+            hp: 100,
+            maxHp: 100,
+            stamina: 3,
+            maxStamina: 3,
+            staminaRecharge: 0,
+            score: 0,
+            styleRankIdx: 0,
+            stylePoints: 0,
+            styleDecayTimer: 0,
+            parryCooldown: 0,
+            parryActiveWindow: 0,
+            isParrying: false,
+            timeScale: 1.0,
+            freezeFrameTimer: 0,
+            wave: 1,
+            bossActive: false
+        };
+
+        const STYLE_RANKS = ["DESTRUCTIVE", "CHAOTIC", "BRUTAL", "ANARCHIC", "SUPREME", "SSADISTIC", "ULTRAKILL"];
+        const STYLE_COLORS = ["#9ca3af", "#60a5fa", "#34d399", "#facc15", "#fb923c", "#f87171", "#ef4444"];
+
+        // --- THREE.JS INITIALIZATION ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x0a0205, 0.015);
+
+        // Render resolution scaled down for PSX retro feel
+        const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(0.6); // Pixelated low-res render
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.BasicShadowMap;
+        container.appendChild(renderer.domElement);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+        // --- AUDIO SYNTHESIZER (No External Assets Required) ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const now = audioCtx.currentTime;
+            
+            if (type === 'shoot') {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(300, now);
+                osc.frequency.exponentialRampToValueAtTime(30, now + 0.2);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.2);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now);
+                osc.stop(now + 0.2);
+            } else if (type === 'parry') {
+                // Ultra loud crisp DING
+                const osc1 = audioCtx.createOscillator();
+                const osc2 = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc1.type = 'sine';
+                osc2.type = 'triangle';
+                osc1.frequency.setValueAtTime(1200, now);
+                osc2.frequency.setValueAtTime(2400, now);
+                gain.gain.setValueAtTime(0.8, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+                osc1.connect(gain);
+                osc2.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc1.start(now);
+                osc2.start(now);
+                osc1.stop(now + 0.6);
+                osc2.stop(now + 0.6);
+            } else if (type === 'hit') {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, now);
+                osc.frequency.exponentialRampToValueAtTime(40, now + 0.1);
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.1);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now);
+                osc.stop(now + 0.1);
+            } else if (type === 'dash') {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, now);
+                osc.frequency.exponentialRampToValueAtTime(100, now + 0.15);
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now);
+                osc.stop(now + 0.15);
+            }
+        }
+
+        // --- LIGHTING ---
+        // Enhanced bright lighting with dark black sky backdrop
+        const ambientLight = new THREE.AmbientLight(0xffffff, 2.5);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+        dirLight.position.set(50, 100, 50);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // Additional fill lights to eliminate dark spots
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.5);
+        scene.add(hemiLight);
+
+        // --- MAP & ARENA BUILDER ---
+        const platforms = []; // Physical collision boxes
+        const jumpPads = []; // Jump pads array definition
+
+        function buildArena() {
+            // White Prototype Grid Texture Generator
+            const canvasGrid = document.createElement('canvas');
+            canvasGrid.width = 256; 
+            canvasGrid.height = 256;
+            const ctx = canvasGrid.getContext('2d');
+            
+            // White prototype base background
+            ctx.fillStyle = '#e8e8ed';
+            ctx.fillRect(0, 0, 256, 256);
+            
+            // Grid lines
+            ctx.strokeStyle = '#a0a5b5';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(0, 0, 256, 256);
+
+            // Sub-grid lines for clean prototype aesthetic
+            ctx.strokeStyle = '#c8cbd6';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(128, 0); ctx.lineTo(128, 256);
+            ctx.moveTo(0, 128); ctx.lineTo(256, 128);
+            ctx.stroke();
+
+            const protoTexture = new THREE.CanvasTexture(canvasGrid);
+            protoTexture.wrapS = THREE.RepeatWrapping;
+            protoTexture.wrapT = THREE.RepeatWrapping;
+            protoTexture.repeat.set(200, 200);
+
+            const matPrototypeFloor = new THREE.MeshStandardMaterial({ 
+                map: protoTexture,
+                roughness: 0.2, 
+                metalness: 0.1 
+            });
+
+            // Massive Infinite Floor Grounding
+            const groundGeo = new THREE.BoxGeometry(2000, 4, 2000);
+            const floorMesh = new THREE.Mesh(groundGeo, matPrototypeFloor);
+            floorMesh.position.set(0, -2, 0);
+            floorMesh.receiveShadow = true;
+            scene.add(floorMesh);
+
+            // Collision platform for the floor
+            const box = new THREE.Box3().setFromObject(floorMesh);
+            platforms.push(box);
+        }
+
+        buildArena();
+
+        // --- PLAYER & WEAPON CONTROLS ---
+        const player = {
+            position: new THREE.Vector3(0, 2, 20),
+            velocity: new THREE.Vector3(),
+            height: 2.0,
+            radius: 0.8,
+            onGround: false,
+            canDoubleJump: true,
+            pitch: 0,
+            yaw: 0
+        };
+
+        // Weapon Mesh (Shotgun / Revolver Hybrid attached to Camera)
+        const weaponGroup = new THREE.Group();
+        const gunBody = new THREE.Mesh(
+            new THREE.BoxGeometry(0.3, 0.4, 1.2),
+            new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.9, roughness: 0.2 })
+        );
+        gunBody.position.set(0.4, -0.4, -0.8);
+        
+        const barrel = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.08, 0.08, 0.8, 8),
+            new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.9 })
+        );
+        barrel.rotation.x = Math.PI / 2;
+        barrel.position.set(0.4, -0.3, -1.2);
+
+        // Player Arm for Parry Effect
+        const armMesh = new THREE.Mesh(
+            new THREE.BoxGeometry(0.2, 0.2, 0.8),
+            new THREE.MeshStandardMaterial({ color: 0x330000 })
+        );
+        armMesh.position.set(-0.5, -0.4, -0.6);
+        armMesh.rotation.y = 0.2;
+
+        weaponGroup.add(gunBody);
+        weaponGroup.add(barrel);
+        weaponGroup.add(armMesh);
+        camera.add(weaponGroup);
+        scene.add(camera);
+
+        // Input Handling
+        const keys = {};
+        let mouseLocked = false;
+
+        document.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'KeyF' && STATE.started) triggerParry();
+            if (e.code === 'Space' && STATE.started) handleJump();
+            if (e.code === 'ShiftLeft' && STATE.started) handleDash();
+        });
+        document.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+        document.addEventListener('mousedown', (e) => {
+            if (!mouseLocked) return;
+            if (e.button === 0) fireWeapon();
+            if (e.button === 2) triggerParry();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!mouseLocked) return;
+            const sensitivity = 0.0022;
+            player.yaw -= e.movementX * sensitivity;
+            player.pitch -= e.movementY * sensitivity;
+            // Limitar el ángulo vertical para no dar la vuelta completa
+            player.pitch = Math.max(-Math.PI / 2.05, Math.min(Math.PI / 2.05, player.pitch));
+        });
+
+        // PointerLock Setup
+        const startBtn = document.getElementById('start-btn');
+        const menuOverlay = document.getElementById('menu-overlay');
+        const hud = document.getElementById('hud');
+
+        startBtn.addEventListener('click', () => {
+            document.body.requestPointerLock();
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement === document.body) {
+                mouseLocked = true;
+                STATE.started = true;
+                menuOverlay.classList.add('hidden');
+                hud.classList.remove('hidden');
+            } else {
+                mouseLocked = false;
+                menuOverlay.classList.remove('hidden');
+            }
+        });
+
+        // --- MOVEMENT PHYSICS ---
+        function updatePlayerPhysics(dt) {
+            if (!STATE.started) return;
+
+            // Apply Gravity
+            player.velocity.y -= 35.0 * dt;
+
+            // Friction / Damping
+            player.velocity.x *= 0.88;
+            player.velocity.z *= 0.88;
+
+            // Direction Vectors
+            const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
+            const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
+
+            const moveSpeed = player.onGround ? 60.0 : 35.0; // High speed air control
+
+            if (keys['KeyW']) { player.velocity.x += forward.x * moveSpeed * dt; player.velocity.z += forward.z * moveSpeed * dt; }
+            if (keys['KeyS']) { player.velocity.x -= forward.x * moveSpeed * dt; player.velocity.z -= forward.z * moveSpeed * dt; }
+            if (keys['KeyD']) { player.velocity.x += right.x * moveSpeed * dt; player.velocity.z += right.z * moveSpeed * dt; }
+            if (keys['KeyA']) { player.velocity.x -= right.x * moveSpeed * dt; player.velocity.z -= right.z * moveSpeed * dt; }
+
+            // Proposed next position
+            const nextPos = player.position.clone().addScaledVector(player.velocity, dt);
+
+            // Platform Collision Detection
+            player.onGround = false;
+            const playerBox = new THREE.Box3();
+            
+            // Y Collision
+            playerBox.min.set(player.position.x - player.radius, nextPos.y - player.height, player.position.z - player.radius);
+            playerBox.max.set(player.position.x + player.radius, nextPos.y, player.position.z + player.radius);
+
+            for (let box of platforms) {
+                if (playerBox.intersectsBox(box)) {
+                    if (player.velocity.y < 0) {
+                        nextPos.y = box.max.y + player.height;
+                        player.velocity.y = 0;
+                        player.onGround = true;
+                        player.canDoubleJump = true;
+                    } else if (player.velocity.y > 0) {
+                        nextPos.y = box.min.y;
+                        player.velocity.y = 0;
+                    }
+                }
+            }
+
+            // XZ Collision
+            playerBox.min.set(nextPos.x - player.radius, player.position.y - player.height + 0.2, nextPos.z - player.radius);
+            playerBox.max.set(nextPos.x + player.radius, player.position.y, nextPos.z + player.radius);
+
+            for (let box of platforms) {
+                if (playerBox.intersectsBox(box)) {
+                    nextPos.x = player.position.x;
+                    nextPos.z = player.position.z;
+                }
+            }
+
+            // Jump Pad Collision
+            for (let pad of jumpPads) {
+                if (nextPos.distanceTo(pad.position) < pad.radius + player.radius && Math.abs(nextPos.y - pad.position.y) < 2) {
+                    player.velocity.y = 28.0; // Mega air boost
+                    playSound('dash');
+                    addStylePoints(50, "JUMP BOOST");
+                }
+            }
+
+            // Floor boundary safety fallback
+            if (nextPos.y < -5) {
+                nextPos.set(0, 2, 0);
+                player.velocity.set(0, 0, 0);
+            }
+
+            player.position.copy(nextPos);
+
+            // Update Camera Position & Rotation (FPS Estilo ULTRAKILL sin inclinación diagonal)
+            camera.position.copy(player.position);
+            
+            // Usar orden YXZ para evitar roll/inclinación diagonal (Gimbal lock & tilt fix)
+            camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+
+            // Recharge Stamina
+            if (STATE.stamina < STATE.maxStamina) {
+                STATE.staminaRecharge += dt;
+                if (STATE.staminaRecharge >= 1.2) {
+                    STATE.stamina++;
+                    STATE.staminaRecharge = 0;
+                    updateStaminaUI();
+                }
+            }
+        }
+
+        function handleJump() {
+            if (player.onGround) {
+                player.velocity.y = 16.0;
+                player.onGround = false;
+            } else if (player.canDoubleJump) {
+                player.velocity.y = 14.0;
+                player.canDoubleJump = false;
+                playSound('dash');
+            }
+        }
+
+        function handleDash() {
+            if (STATE.stamina <= 0) return;
+            STATE.stamina--;
+            updateStaminaUI();
+            playSound('dash');
+
+            // Calculate directional input vector (WASD)
+            let inputDir = new THREE.Vector3(0, 0, 0);
+            const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
+            const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
+
+            if (keys['KeyW']) inputDir.add(forward);
+            if (keys['KeyS']) inputDir.sub(forward);
+            if (keys['KeyD']) inputDir.add(right);
+            if (keys['KeyA']) inputDir.sub(right);
+
+            // Default to forward dash if no movement keys are pressed
+            if (inputDir.lengthSq() === 0) {
+                inputDir.copy(forward);
+            } else {
+                inputDir.normalize();
+            }
+
+            player.velocity.x += inputDir.x * 45.0;
+            player.velocity.z += inputDir.z * 45.0;
+            
+            addStylePoints(20, "DASH");
+        }
+
+        function updateStaminaUI() {
+            for (let i = 1; i <= 3; i++) {
+                const el = document.getElementById(`dash-${i}`);
+                if (i <= STATE.stamina) {
+                    el.classList.remove('bg-gray-800');
+                    el.classList.add('bg-cyan-400');
+                } else {
+                    el.classList.remove('bg-cyan-400');
+                    el.classList.add('bg-gray-800');
+                }
+            }
+        }
+
+        // --- COMBAT & PARRY SYSTEM ---
+        const projectiles = [];
+        const particles = [];
+        const enemies = [];
+
+        function fireWeapon() {
+            playSound('shoot');
+
+            // Gun Recoil Animation
+            weaponGroup.position.z = 0.2;
+            weaponGroup.rotation.x = 0.2;
+
+            // Muzzle Flash Effect
+            const flash = new THREE.PointLight(0xffaa00, 5, 10);
+            flash.position.copy(camera.position).add(camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(1.5));
+            scene.add(flash);
+            setTimeout(() => scene.remove(flash), 50);
+
+            // Raycast Hitscan Shot
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+
+            // Collect shootable enemy meshes
+            const targetMeshes = [];
+            enemies.forEach(e => targetMeshes.push(e.mesh));
+
+            const intersects = raycaster.intersectObjects(targetMeshes, true);
+
+            if (intersects.length > 0) {
+                const hit = intersects[0];
+                let enemy = enemies.find(e => e.mesh === hit.object || e.mesh.children.includes(hit.object));
+
+                if (enemy) {
+                    enemy.damage(35);
+                    triggerHitmarker();
+                    playSound('hit');
+                    createParticles(hit.point, 0xff0000, 12);
+                    addStylePoints(40, "GUNSHOT");
+                }
+            } else {
+                // Bullet impact on wall/environment
+                const envIntersects = raycaster.intersectObjects(scene.children);
+                if (envIntersects.length > 0) {
+                    createParticles(envIntersects[0].point, 0xffaa00, 6);
+                }
+            }
+        }
+
+        // PARRY MECHANIC (Core ULTRAKILL Mechanic)
+        function triggerParry() {
+            if (STATE.parryCooldown > 0) return;
+
+            STATE.isParrying = true;
+            STATE.parryActiveWindow = 0.25; // 250ms parry window
+            STATE.parryCooldown = 0.6;
+
+            document.getElementById('parry-status').innerText = "PARRY ACTIVE!";
+            document.getElementById('parry-status').className = "text-xs font-bold text-yellow-300 animate-pulse";
+
+            // Visual Punch Arm Anim
+            armMesh.position.z = -1.2;
+            armMesh.position.x = 0.0;
+
+            // Check instantly for near projectiles or melee attacks
+            let parriedSomething = false;
+
+            projectiles.forEach((p, index) => {
+                if (p.isHostile && p.mesh.position.distanceTo(camera.position) < 4.5) {
+                    parriedSomething = true;
+                    reflectProjectile(p);
+                }
+            });
+
+            if (parriedSomething) {
+                executeParrySuccess();
+            }
+
+            setTimeout(() => {
+                armMesh.position.z = -0.6;
+                armMesh.position.x = -0.5;
+            }, 200);
+        }
+
+        function reflectProjectile(p) {
+            p.isHostile = false;
+            // Supercharge projectile speed and turn neon blue
+            p.velocity = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(80.0);
+            p.mesh.material.color.setHex(0x00ffff);
+            p.damage = 150; // Supercharged damage
+        }
+
+        function executeParrySuccess() {
+            playSound('parry');
+
+            // Freeze Frame / Slow motion impact
+            STATE.timeScale = 0.05;
+            STATE.freezeFrameTimer = 0.15; // 150ms real time freeze
+
+            // Flash Screen
+            const flash = document.getElementById('flash-overlay');
+            flash.className = "pointer-events-none fixed inset-0 z-40 parry-flash";
+
+            // Full Player Heal
+            STATE.hp = STATE.maxHp;
+            updateHpUI();
+
+            addStylePoints(250, "PARRY!");
+            triggerHitmarker();
+        }
+
+        function createParticles(pos, colorHex, count) {
+            for (let i = 0; i < count; i++) {
+                const p = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.15, 0.15, 0.15),
+                    new THREE.MeshBasicMaterial({ color: colorHex })
+                );
+                p.position.copy(pos);
+                const vel = new THREE.Vector3(
+                    (Math.random() - 0.5) * 12,
+                    (Math.random() - 0.5) * 12,
+                    (Math.random() - 0.5) * 12
+                );
+                scene.add(p);
+                particles.push({ mesh: p, velocity: vel, life: 0.4 });
+            }
+        }
+
+        // --- ENEMIES & BOSS AI ---
+
+        // Ground Melee Enemy
+        class MeleeHusk {
+            constructor(x, z) {
+                const geo = new THREE.BoxGeometry(1.4, 2.8, 1.4);
+                const mat = new THREE.MeshStandardMaterial({ color: 0xcc1133, roughness: 0.4 });
+                this.mesh = new THREE.Mesh(geo, mat);
+                this.mesh.position.set(x, 1.4, z); // Strictly on floor
+                
+                // Aggressive red visor
+                const eye = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.3, 0.3), new THREE.MeshBasicMaterial({ color: 0xff0000 }));
+                eye.position.set(0, 0.8, -0.7);
+                this.mesh.add(eye);
+
+                scene.add(this.mesh);
+
+                this.hp = 80;
+                this.speed = 9.0;
+                this.attackCooldown = 0;
+            }
+
+            update(dt) {
+                // Ensure remaining locked strictly on floor Y=1.4
+                this.mesh.position.y = 1.4;
+
+                this.mesh.lookAt(player.position.x, 1.4, player.position.z);
+                const dir = player.position.clone();
+                dir.y = 1.4;
+                dir.sub(this.mesh.position).normalize();
+                
+                this.mesh.position.addScaledVector(dir, this.speed * dt);
+
+                // Melee Strike
+                const distToPlayer = this.mesh.position.distanceTo(new THREE.Vector3(player.position.x, 1.4, player.position.z));
+                if (distToPlayer < 2.0 && this.attackCooldown <= 0) {
+                    this.attackCooldown = 1.0;
+                    damagePlayer(20);
+                }
+                if (this.attackCooldown > 0) this.attackCooldown -= dt;
+            }
+
+            damage(amount) {
+                this.hp -= amount;
+                if (this.hp <= 0) {
+                    createParticles(this.mesh.position, 0xcc1133, 20);
+                    scene.remove(this.mesh);
+                    enemies.splice(enemies.indexOf(this), 1);
+                    addStylePoints(100, "MELEE KILL");
+                    checkWaveProgress();
+                }
+            }
+        }
+
+        // Grounded Shooter Enemy
+        class GroundShooter {
+            constructor(x, z) {
+                const geo = new THREE.CylinderGeometry(0.8, 1.0, 2.6, 8);
+                const mat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.3, metalness: 0.6 });
+                this.mesh = new THREE.Mesh(geo, mat);
+                this.mesh.position.set(x, 1.3, z); // Strictly on ground
+
+                const cannon = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 1.2), new THREE.MeshBasicMaterial({ color: 0xffaa00 }));
+                cannon.position.set(0, 0.5, -0.8);
+                this.mesh.add(cannon);
+
+                scene.add(this.mesh);
+
+                this.hp = 65;
+                this.shootTimer = Math.random() * 1.5;
+            }
+
+            update(dt) {
+                this.mesh.position.y = 1.3; // Lock Y
+                this.mesh.lookAt(player.position.x, 1.3, player.position.z);
+
+                // Keep distance while on ground
+                const dist = this.mesh.position.distanceTo(new THREE.Vector3(player.position.x, 1.3, player.position.z));
+                const dir = player.position.clone();
+                dir.y = 1.3;
+                dir.sub(this.mesh.position).normalize();
+
+                if (dist > 18) {
+                    this.mesh.position.addScaledVector(dir, 5.0 * dt);
+                } else if (dist < 10) {
+                    this.mesh.position.addScaledVector(dir, -4.0 * dt);
+                }
+
+                // Fire parryable projectile
+                this.shootTimer += dt;
+                if (this.shootTimer >= 2.5) {
+                    this.shootTimer = 0;
+                    this.shootProjectile();
+                }
+            }
+
+            shootProjectile() {
+                const projGeo = new THREE.SphereGeometry(0.45, 8, 8);
+                const projMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+                const proj = new THREE.Mesh(projGeo, projMat);
+                proj.position.copy(this.mesh.position).add(new THREE.Vector3(0, 0.5, 0));
+
+                const dir = player.position.clone().sub(proj.position).normalize();
+                scene.add(proj);
+
+                projectiles.push({
+                    mesh: proj,
+                    velocity: dir.multiplyScalar(22.0),
+                    isHostile: true,
+                    damage: 20,
+                    life: 6.0
+                });
+            }
+
+            damage(amount) {
+                this.hp -= amount;
+                if (this.hp <= 0) {
+                    createParticles(this.mesh.position, 0xffaa00, 20);
+                    scene.remove(this.mesh);
+                    enemies.splice(enemies.indexOf(this), 1);
+                    addStylePoints(100, "RANGED KILL");
+                    checkWaveProgress();
+                }
+            }
+        }
+
+        class BossApostle {
+            constructor(x, z) {
+                this.group = new THREE.Group();
+                
+                // Body Architecture
+                const bodyMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, roughness: 0.1 });
+                const body = new THREE.Mesh(new THREE.BoxGeometry(3.0, 6, 2.2), bodyMat);
+                this.group.add(body);
+
+                // Radiant Boss Core & Halo
+                const coreMat = new THREE.MeshBasicMaterial({ color: 0xff0044 });
+                const core = new THREE.Mesh(new THREE.SphereGeometry(0.9, 16, 16), coreMat);
+                core.position.set(0, 1.2, 0);
+                this.group.add(core);
+
+                const haloMat = new THREE.MeshBasicMaterial({ color: 0xffd700, side: THREE.DoubleSide });
+                const halo = new THREE.Mesh(new THREE.TorusGeometry(1.6, 0.1, 8, 24), haloMat);
+                halo.rotation.x = Math.PI / 2;
+                halo.position.set(0, 3.8, 0);
+                this.group.add(halo);
+
+                // Dual Tier Glowing Wings
+                this.wingMat = new THREE.MeshBasicMaterial({ color: 0xff0055, side: THREE.DoubleSide });
+                const leftWing = new THREE.Mesh(new THREE.PlaneGeometry(8, 3.5), this.wingMat);
+                leftWing.position.set(-4.5, 1.5, 0);
+                leftWing.rotation.y = 0.3;
+                
+                const rightWing = new THREE.Mesh(new THREE.PlaneGeometry(8, 3.5), this.wingMat);
+                rightWing.position.set(4.5, 1.5, 0);
+                rightWing.rotation.y = -0.3;
+
+                this.group.add(leftWing);
+                this.group.add(rightWing);
+
+                this.group.position.set(x, 3.0, z); // Grounded boss position
+                scene.add(this.group);
+                this.mesh = body;
+
+                this.hp = 1200;
+                this.maxHp = 1200;
+                this.attackTimer = 0;
+                this.phase = 1;
+
+                document.getElementById('boss-hud').classList.remove('hidden');
+                document.getElementById('boss-hud').classList.add('flex');
+            }
+
+            update(dt) {
+                this.group.lookAt(player.position.x, 3.0, player.position.z);
+                this.group.position.y = 3.0; // Locked on floor height
+
+                this.attackTimer += dt;
+                const cooldown = this.phase === 1 ? 1.8 : 1.1;
+                if (this.attackTimer >= cooldown) {
+                    this.attackTimer = 0;
+                    this.executeAttackPattern();
+                }
+
+                // Update Boss HP UI
+                const pct = Math.max(0, (this.hp / this.maxHp) * 100);
+                document.getElementById('boss-hp-bar').style.width = `${pct}%`;
+                document.getElementById('boss-hp-text').innerText = `${Math.ceil(pct)}%`;
+            }
+
+            executeAttackPattern() {
+                const attacks = [1, 2, 3];
+                const choice = attacks[Math.floor(Math.random() * attacks.length)];
+
+                if (choice === 1) {
+                    // Barrage
+                    for (let i = -2; i <= 2; i++) {
+                        setTimeout(() => {
+                            if (!this.group || this.hp <= 0) return;
+                            const proj = new THREE.Mesh(
+                                new THREE.SphereGeometry(0.5, 8, 8),
+                                new THREE.MeshBasicMaterial({ color: 0xff0044 })
+                            );
+                            proj.position.copy(this.group.position).add(new THREE.Vector3(i * 1.5, 0, 0));
+                            const dir = player.position.clone().sub(proj.position).normalize();
+                            scene.add(proj);
+
+                            projectiles.push({
+                                mesh: proj,
+                                velocity: dir.multiplyScalar(24.0),
+                                isHostile: true,
+                                damage: 25,
+                                life: 5.0
+                            });
+                        }, (i + 2) * 80);
+                    }
+                } else if (choice === 2) {
+                    // Ring Blast
+                    const ringCount = this.phase === 1 ? 12 : 18;
+                    for (let i = 0; i < ringCount; i++) {
+                        const angle = (i / ringCount) * Math.PI * 2;
+                        const proj = new THREE.Mesh(
+                            new THREE.SphereGeometry(0.4, 8, 8),
+                            new THREE.MeshBasicMaterial({ color: 0xffff00 })
+                        );
+                        proj.position.copy(this.group.position);
+                        const dir = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle)).normalize();
+                        scene.add(proj);
+
+                        projectiles.push({
+                            mesh: proj,
+                            velocity: dir.multiplyScalar(20.0),
+                            isHostile: true,
+                            damage: 20,
+                            life: 6.0
+                        });
+                    }
+                } else if (choice === 3) {
+                    // Teleport across infinite floor
+                    const posOptions = [
+                        new THREE.Vector3(0, 3, -30),
+                        new THREE.Vector3(30, 3, 0),
+                        new THREE.Vector3(-30, 3, 0),
+                        new THREE.Vector3(0, 3, 30)
+                    ];
+                    const choicePos = posOptions[Math.floor(Math.random() * posOptions.length)];
+                    createParticles(this.group.position, 0xff0055, 30);
+                    this.group.position.copy(choicePos);
+                    createParticles(this.group.position, 0xff0055, 30);
+                }
+            }
+
+            damage(amount) {
+                this.hp -= amount;
+                if (this.hp <= this.maxHp * 0.5 && this.phase === 1) {
+                    this.phase = 2;
+                    this.wingMat.color.setHex(0x00ffff);
+                    addStylePoints(300, "BOSS ENRAGED!");
+                }
+
+                if (this.hp <= 0) {
+                    createParticles(this.group.position, 0xff0055, 80);
+                    scene.remove(this.group);
+                    enemies.splice(enemies.indexOf(this), 1);
+                    document.getElementById('boss-hud').classList.add('hidden');
+                    addStylePoints(1000, "BOSS DESTROYED!");
+                    showVictoryScreen();
+                }
+            }
+        }
+
+        // --- WAVE SPAWNER ---
+        function spawnWave(waveNum) {
+            if (waveNum === 1) {
+                enemies.push(new MeleeHusk(-10, -15));
+                enemies.push(new MeleeHusk(10, -15));
+                enemies.push(new GroundShooter(0, -25));
+            } else if (waveNum === 2) {
+                enemies.push(new MeleeHusk(-20, 0));
+                enemies.push(new MeleeHusk(20, 0));
+                enemies.push(new GroundShooter(-15, -20));
+                enemies.push(new GroundShooter(15, -20));
+            } else if (waveNum === 3) {
+                // BOSS WAVE
+                STATE.bossActive = true;
+                enemies.push(new BossApostle(0, -20));
+            }
+        }
+
+        function checkWaveProgress() {
+            if (enemies.length === 0 && STATE.started) {
+                STATE.wave++;
+                if (STATE.wave <= 3) {
+                    setTimeout(() => spawnWave(STATE.wave), 2000);
+                }
+            }
+        }
+
+        spawnWave(1);
+
+        // --- STYLE METER & HUD UPDATES ---
+        function addStylePoints(pts, actionName) {
+            STATE.stylePoints += pts;
+            STATE.score += pts;
+
+            // Determine Rank
+            let newRankIdx = Math.min(STYLE_RANKS.length - 1, Math.floor(STATE.stylePoints / 200));
+            STATE.styleRankIdx = newRankIdx;
+
+            const rankEl = document.getElementById('style-rank');
+            rankEl.innerText = STYLE_RANKS[newRankIdx];
+            rankEl.style.color = STYLE_COLORS[newRankIdx];
+
+            document.getElementById('style-pts').innerText = `${STATE.score} PTS`;
+            document.getElementById('style-action').innerText = `+${pts} ${actionName}`;
+
+            STATE.styleDecayTimer = 3.0; // Seconds before style drops
+        }
+
+        function triggerHitmarker() {
+            const hm = document.getElementById('hitmarker');
+            hm.style.transform = 'translate(-50%, -50%) scale(1.4)';
+            hm.style.opacity = '1';
+            setTimeout(() => {
+                hm.style.transform = 'translate(-50%, -50%) scale(0)';
+                hm.style.opacity = '0';
+            }, 120);
+        }
+
+        function damagePlayer(amount) {
+            STATE.hp -= amount;
+            updateHpUI();
+            
+            // Screen Red Flash
+            const flash = document.getElementById('flash-overlay');
+            flash.className = "pointer-events-none fixed inset-0 z-40 bg-red-600/40 transition-opacity duration-150";
+            setTimeout(() => { flash.className = "pointer-events-none fixed inset-0 z-40 bg-transparent"; }, 150);
+
+            if (STATE.hp <= 0) {
+                // Game Over
+                alert("YOU DIED. PRESS REFRESH TO RESTART.");
+                location.reload();
+            }
+        }
+
+        function updateHpUI() {
+            const pct = Math.max(0, (STATE.hp / STATE.maxHp) * 100);
+            document.getElementById('hp-bar').style.width = `${pct}%`;
+            document.getElementById('hp-text').innerText = `${Math.ceil(STATE.hp)} / ${STATE.maxHp}`;
+        }
+
+        function showVictoryScreen() {
+            document.exitPointerLock();
+            menuOverlay.classList.remove('hidden');
+            menuOverlay.innerHTML = `
+                <h1 class="text-6xl font-black italic text-yellow-400 mb-2">STAGE CLEAR</h1>
+                <p class="text-xl text-white font-bold mb-4">FINAL SCORE: ${STATE.score} PTS</p>
+                <p class="text-sm text-gray-400 mb-6">STYLE RANK: ${STYLE_RANKS[STATE.styleRankIdx]}</p>
+                <button onclick="location.reload()" class="px-8 py-4 bg-red-600 text-black font-black text-2xl uppercase border-2 border-yellow-400 cursor-pointer">
+                    REPLAY SLAUGHTER
+                </button>
+            `;
+        }
+
+        // --- MAIN GAME LOOP ---
+        let lastTime = performance.now();
+
+        function animate(currentTime) {
+            requestAnimationFrame(animate);
+
+            let realDt = (currentTime - lastTime) / 1000.0;
+            lastTime = currentTime;
+            if (realDt > 0.1) realDt = 0.1; // Cap large Delta lag
+
+            // Apply Freeze Frame / Slow Motion if active
+            if (STATE.freezeFrameTimer > 0) {
+                STATE.freezeFrameTimer -= realDt;
+                if (STATE.freezeFrameTimer <= 0) {
+                    STATE.timeScale = 1.0;
+                }
+            }
+
+            const dt = realDt * STATE.timeScale;
+
+            if (STATE.started) {
+                updatePlayerPhysics(dt);
+
+                // Parry Cooldown update
+                if (STATE.parryCooldown > 0) {
+                    STATE.parryCooldown -= dt;
+                    if (STATE.parryCooldown <= 0) {
+                        document.getElementById('parry-status').innerText = "PARRY READY [R-CLICK/F]";
+                        document.getElementById('parry-status').className = "text-xs font-bold text-cyan-400 mt-1";
+                    }
+                }
+
+                if (STATE.parryActiveWindow > 0) {
+                    STATE.parryActiveWindow -= dt;
+                    if (STATE.parryActiveWindow <= 0) STATE.isParrying = false;
+                }
+
+                // Update Projectiles
+                projectiles.forEach((p, index) => {
+                    p.mesh.position.addScaledVector(p.velocity, dt);
+                    p.life -= dt;
+
+                    // Hostile Projectile vs Player Collision
+                    if (p.isHostile && p.mesh.position.distanceTo(camera.position) < 1.2) {
+                        damagePlayer(p.damage);
+                        scene.remove(p.mesh);
+                        projectiles.splice(index, 1);
+                        return;
+                    }
+
+                    // Reflected Projectile vs Enemy Collision
+                    if (!p.isHostile) {
+                        enemies.forEach(e => {
+                            if (e.mesh && p.mesh.position.distanceTo(e.mesh.position) < 2.5) {
+                                e.damage(p.damage);
+                                createParticles(p.mesh.position, 0x00ffff, 25);
+                                scene.remove(p.mesh);
+                                projectiles.splice(index, 1);
+                            }
+                        });
+                    }
+
+                    // Expiration or wall hit
+                    if (p.life <= 0) {
+                        scene.remove(p.mesh);
+                        projectiles.splice(index, 1);
+                    }
+                });
+
+                // Update Enemies
+                enemies.forEach(e => e.update(dt));
+
+                // Update Particles
+                particles.forEach((pt, index) => {
+                    pt.mesh.position.addScaledVector(pt.velocity, dt);
+                    pt.life -= dt;
+                    if (pt.life <= 0) {
+                        scene.remove(pt.mesh);
+                        particles.splice(index, 1);
+                    }
+                });
+
+                // Style Points Decay
+                if (STATE.stylePoints > 0) {
+                    STATE.styleDecayTimer -= dt;
+                    if (STATE.styleDecayTimer <= 0) {
+                        STATE.stylePoints = Math.max(0, STATE.stylePoints - 50 * dt);
+                    }
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Window Resizing
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start Loop
+        requestAnimationFrame(animate);
+    </script>
+</body>
+</html>
